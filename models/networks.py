@@ -10,6 +10,8 @@ from models import psfrnet
 import torch.nn.utils as tutils
 from models.loss import PCPFeat
 
+import torch.nn.functional as F
+
 
 def apply_norm(net, weight_norm_type):
     for m in net.modules():
@@ -191,6 +193,45 @@ class ParseNet(nn.Module):
         x = self.decoder(x)
         out_img = self.out_img_conv(x) 
         out_mask = self.out_mask_conv(x)
+        return out_mask, out_img
+
+
+class UpBlock2d(nn.Module):
+    """
+    Upsampling block for use in decoder.
+    """
+
+    def __init__(self, in_features, out_features, kernel_size=3, padding=1, groups=1):
+        super(UpBlock2d, self).__init__()
+
+        self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
+                              padding=padding, groups=groups)
+        self.norm = nn.BatchNorm2d(out_features, affine=True)
+
+    def forward(self, x):
+        out = F.interpolate(x, scale_factor=2, mode="nearest")
+        out = self.conv(out)
+        out = self.norm(out)
+        out = F.relu(out)
+        return out
+
+
+class ParseNetEffdet(nn.Module):
+    import segmentation_models_pytorch as smp
+
+    def __init__(self):
+        super().__init__()
+
+        self.seg_model = smp.FPN('timm-efficientnet-b0', encoder_depth=4, upsampling=2)
+        self.image_head = nn.Sequential(UpBlock2d(128, 64), nn.Conv2d(64, 3, kernel_size=(7, 7), padding=(3, 3)))
+
+    def forward(self, x):
+        features = self.seg_model.encoder(x)
+        decoder_output = self.seg_model.decoder(*features)
+
+        out_img = self.image_head(decoder_output)
+        out_mask = self.seg_model.segmentation_head(decoder_output)
+
         return out_mask, out_img
 
 
